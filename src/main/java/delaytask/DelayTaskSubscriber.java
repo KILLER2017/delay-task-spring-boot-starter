@@ -17,5 +17,5 @@ public interface DelayTaskSubscriber {
      * @param task 延迟任务
      * @return 是否处理成功
      */
-    boolean handleTask(DelayTask task);
+    DelayTaskHandleResult handleTask(DelayTask task);
 }

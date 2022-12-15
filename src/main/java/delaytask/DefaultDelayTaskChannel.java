@@ -30,8 +30,6 @@ public class DefaultDelayTaskChannel implements DelayTaskChannel {
 
     private final Set<DelayTaskSubscriber> subscribers;
 
-    private volatile boolean destroyFlag = false;
-
     public DefaultDelayTaskChannel(RedisTemplate<String, Object> redisTemplate, RedissonClient redissonClient, Executor executor,
                                    Set<DelayTaskSubscriber> subscribers) {
         this.redisTemplate = redisTemplate;
@@ -65,56 +63,56 @@ public class DefaultDelayTaskChannel implements DelayTaskChannel {
         }
     }
 
-    public final class EventDispatcher implements Runnable {
+    public final class TaskDispatcher implements Runnable {
 
         @Override
         public void run() {
-            LOGGER.debug("延迟任务分发器 - 启动");
-            while (!Thread.interrupted()) {
-                try {
-                    Set<Object> delayTasks = redisTemplate.opsForZSet().rangeByScore(KEY, 0L, System.currentTimeMillis());
-                    if (delayTasks != null) {
-                        for (Object task : delayTasks) {
-                            DelayTask delayEvent = (DelayTask) task;
-                            RLock taskLock = redissonClient.getLock(KEY + ":dispatcher:lock:" + task.hashCode());
-                            try {
-                                // 尝试获取任务锁，若获取锁失败，则取下一个任务
-                                if (!taskLock.tryLock()) {
-                                    continue;
-                                }
-
-                                Long wakeTime = (Long) redisTemplate.opsForValue().get(KEY + ":" + task);
-                                if (wakeTime == null || System.currentTimeMillis() < wakeTime) {
-                                    continue;
-                                }
-
-                                for (DelayTaskSubscriber subscriber : subscribers) {
-                                    if (subscriber.isSupport(delayEvent)) {
-                                        // 开启新线程处理事件
-                                        CompletableFuture.supplyAsync(() -> subscriber.handleTask(delayEvent), executor).whenComplete((result, throwable) -> {
-                                            if (throwable != null || !result) {
-                                                LOGGER.error("延迟任务处理异常，任务：{}，异常：{}", delayEvent, throwable);
-                                                // 一分钟后重试
-                                                publish(delayEvent, System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(1L));
-                                            } else {
-                                                withdraw(delayEvent);
-                                            }
-                                        });
-                                    }
-                                }
-                            } finally {
-                                if (taskLock.isHeldByCurrentThread()) {
-                                    taskLock.unlock();
-                                }
+            try {
+                Set<Object> delayTasks = redisTemplate.opsForZSet().rangeByScore(KEY, 0L, System.currentTimeMillis());
+                if (delayTasks != null) {
+                    for (Object task : delayTasks) {
+                        DelayTask delayEvent = (DelayTask) task;
+                        RLock taskLock = redissonClient.getLock(KEY + ":dispatcher:lock:" + task.hashCode());
+                        try {
+                            // 尝试获取任务锁，若获取锁失败，则取下一个任务
+                            if (!taskLock.tryLock()) {
+                                continue;
                             }
 
-                        }
-                    }
+                            Long wakeTime = (Long) redisTemplate.opsForValue().get(KEY + ":" + task);
+                            if (wakeTime == null || System.currentTimeMillis() < wakeTime) {
+                                continue;
+                            }
 
-                    Thread.sleep(100);
-                } catch (Exception e) {
-                    LOGGER.error("延迟任务分发器异常：{}，{}", e.getMessage(), e.toString());
+                            for (DelayTaskSubscriber subscriber : subscribers) {
+                                if (subscriber.isSupport(delayEvent)) {
+                                    // 开启新线程处理事件
+                                    CompletableFuture.supplyAsync(() -> subscriber.handleTask(delayEvent), executor).whenComplete((result, throwable) -> {
+                                        if (throwable != null || DelayTaskHandleResult.FAILED.equals(result)) {
+                                            LOGGER.error("延迟任务处理异常，任务：{}，异常：{}", delayEvent, throwable);
+                                            Long retry = redisTemplate.opsForValue().increment(KEY + ":retry:" + delayEvent);
+                                            redisTemplate.expire(KEY + ":retry:" + delayEvent, 30, TimeUnit.MINUTES);
+                                            if (retry != null && retry > 5) {
+                                                redisTemplate.opsForZSet().add(KEY + ":failedTask", delayEvent, System.currentTimeMillis());
+                                            } else if (retry != null) {
+                                                publish(delayEvent, System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(retry));
+                                            }
+                                        } else if (DelayTaskHandleResult.SUCCESS.equals(result)) {
+                                            withdraw(delayEvent);
+                                        }
+                                    });
+                                }
+                            }
+                        } finally {
+                            if (taskLock.isHeldByCurrentThread()) {
+                                taskLock.unlock();
+                            }
+                        }
+
+                    }
                 }
+            } catch (Exception e) {
+                LOGGER.error("延迟任务分发器异常：{}，{}", e.getMessage(), e.toString());
             }
         }
     }
