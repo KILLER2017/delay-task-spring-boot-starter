@@ -6,6 +6,7 @@ import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.util.Assert;
 
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -70,7 +71,9 @@ public class DefaultDelayTaskChannel implements DelayTaskChannel {
             try {
                 Set<Object> delayTasks = redisTemplate.opsForZSet().rangeByScore(KEY, 0L, System.currentTimeMillis());
                 if (delayTasks != null) {
-                    for (Object task : delayTasks) {
+                    for (Object task : delayTasks)
+                    {
+                        Assert.notNull(task, "任务出现NULL");
                         DelayTask delayEvent = (DelayTask) task;
                         RLock taskLock = redissonClient.getLock(KEY + ":dispatcher:lock:" + task.hashCode());
                         try {

@@ -63,7 +63,7 @@ public class DelayTaskAutoConfiguration {
     public DelayTaskChannel delayTaskChannel() {
         DefaultDelayTaskChannel delayTaskChannel = new DefaultDelayTaskChannel(redisTemplate, redissonClient, executor(), subscriberSet);
         DefaultDelayTaskChannel.TaskDispatcher taskDispatcher = delayTaskChannel.new TaskDispatcher();
-        Executors.newScheduledThreadPool(1).schedule(taskDispatcher, 100, TimeUnit.MILLISECONDS);
+        Executors.newScheduledThreadPool(1).scheduleAtFixedRate(taskDispatcher, 0, 100, TimeUnit.MILLISECONDS);
         return delayTaskChannel;
     }
 }
