@@ -137,3 +137,5 @@ public class DemoSpringBootApplication implements CommandLineRunner {
     }
 }
 ```
+
+5秒后输出“hello, world”
